@@ -263,14 +263,14 @@ def compare_data(xparray, simarray, xspairlist, vardata=False):
     #print "OBJOUT(total):", objout
     return numpy.asarray(objout)
 
-def getlog(sobolarr, params, omag=1, useparams=[], usemag=None):
-    # map a set of sobol pseudo-random numbers to a range for parameter evaluation
-    # sobol: sobol number array of the appropriate length
+def getlog(pseudoarr, params, omag=1, useparams=[], usemag=None):
+    # map a set of pseudo-random numbers (preferably low discrepancy) to a range for parameter evaluation
+    # pseudoarr: pseudo random number array of the appropriate length
     # params: array of parameters
     # omag: order of magnitude over which params should be sampled. this is effectively 3 orders of magnitude when omag=1
     #
 
-    sobprmarr = numpy.zeros_like(sobolarr)
+    parmarr = numpy.zeros_like(pseudoarr)
     ub = numpy.zeros(len(params))
     lb = numpy.zeros(len(params))
     # set upper/lower bounds for generic problem
@@ -283,24 +283,24 @@ def getlog(sobolarr, params, omag=1, useparams=[], usemag=None):
             lb[i] = params[i] / pow(10, omag)
     
     # see  for more info http://en.wikipedia.org/wiki/Exponential_family
-    sobprmarr = lb*(ub/lb)**sobolarr # map the [0..1] sobol array to values sampled over their omags
+    parmarr = lb*(ub/lb)**pseudoarr # map the [0..1] pseudo random array to values sampled over their omags
 
-    # sobprmarr is the N x len(params) array for sobol analysis
-    return sobprmarr
+    # N x len(params) array for analysis
+    return parmarr
 
-def getlin(sobolarr, params, CV =.25, useparams=[], useCV=None):
-    """ map a set of sobol pseudo-random numbers to a range for parameter evaluation
+def getlin(pseudoarr, params, CV =.25, useparams=[], useCV=None):
+    """ map a set of pseudo-random numbers to a range for parameter evaluation
 
-    sobol: sobol number array of the appropriate length
+    pseudo: pseudo random number array of the appropriate length in range [0..1)
     params: array of parameters
     stdev: standard deviation for parameters, this assumes it is unknown for the sampling
     
-    function maps the sobol (or any random) [0:1) array linearly to mean-2sigma < x < mean + 2sigma
+    function maps the pseudo random [0:1) array linearly to mean-2sigma < x < mean + 2sigma
 
     CV is the coefficient of variance, CV = sigma/mean
     """
 
-    sobprmarr = numpy.zeros_like(sobolarr)
+    parmarr = numpy.zeros_like(pseudoarr)
 
     ub = numpy.zeros(len(params))
     lb = numpy.zeros(len(params))
@@ -312,58 +312,55 @@ def getlin(sobolarr, params, CV =.25, useparams=[], useCV=None):
         else:
             ub[i] = params[i] + params[i]*CV
             lb[i] = params[i] - params[i]*CV
-    
-    # sobprmarr = (sobolarr*(ub-lb)) + lb #map the [0..1] sobol array to the values for integration
-    if len(sobprmarr.shape) == 1:
-        sobprmarr = (sobolarr*(ub-lb)) + lb
-    elif len(sobprmarr.shape) == 2:
-        for i in range(sobprmarr.shape[0]):
-            sobprmarr[i] = (sobolarr[i]*(ub-lb)) + lb
+
+    # parmarr = (pseudoarr*(ub-lb)) + lb #map the [0..1] pseudo array to the values for integration
+    if len(parmarr.shape) == 1:
+        parmarr = (pseudoarr*(ub-lb)) + lb
+    elif len(parmarr.shape) == 2:
+        for i in range(parmarr.shape[0]):
+            parmarr[i] = (pseudoarr[i]*(ub-lb)) + lb
     else:
         print "array shape not allowed... "
-        
 
-    # sobprmarr is the N x len(params) array for sobol analysis
-    # lb is the lower bound of params
-    # ub is the upper bound of params
-    return sobprmarr
+    return parmarr
 
 
-def genCmtx(sobmtxA, sobmtxB):
-    """when passing the quasi-random sobol-treated A and B matrixes, this function iterates over all the possibilities
-    and returns the C matrix for simulations.
-    See e.g. Saltelli, Ratto, Andres, Campolongo, Cariboni, Gatelli, Saisana, Tarantola Global Sensitivity Analysis"""
+def genCmtx(ldmtxA, ldmtxB):
+    """when passing the quasi-random low discrepancy-treated A and B matrixes, this function
+    iterates over all the possibilities and returns the C matrix for simulations.
+    See e.g. Saltelli, Ratto, Andres, Campolongo, Cariboni, Gatelli, Saisana,
+    Tarantola Global Sensitivity Analysis"""
 
-    nparams = sobmtxA.shape[1] # shape 1 should be the number of params
+    nparams = ldmtxA.shape[1] # shape 1 should be the number of params
 
     # allocate the space for the C matrix
-    sobmtxC = numpy.array([sobmtxB]*nparams) 
+    ldmtxC = numpy.array([ldmtxB]*nparams) 
 
-    # Now we have nparams copies of sobmtxB. replace the i_th column of sobmtxC with the i_th column of sobmtxA
+    # Now we have nparams copies of ldmtxB. replace the i_th column of ldmtxC with the i_th column of ldmtxA
     for i in range(nparams):
-        sobmtxC[i,:,i] = sobmtxA[:,i]
+        ldmtxC[i,:,i] = ldmtxA[:,i]
 
-    return sobmtxC
+    return ldmtxC
 
-
-def parmeval(model, sobmtxA, sobmtxB, sobmtxC, time, envlist, xpdata, xspairlist, ic=True, norm=True, vardata=False, useparams = None, fileobj=None):
-    ''' Function parmeval calculates the yA, yB, and yC_i arrays needed for variance-based global sensitivity analysis
-    as prescribed by Saltelli and derived from the work by Sobol.
+def parmeval(model, ldmtxA, ldmtxB, ldmtxC, time, envlist, xpdata, xspairlist, ic=True, norm=True, vardata=False, useparams = None, fileobj=None):
+    ''' Function parmeval calculates the yA, yB, and yC_i arrays needed for variance-based
+    global sensitivity analysis as prescribed by Saltelli and derived from the work by Sobol
+    (low-discrepancy sequences)
     '''
     # 
     #
 
     # assign the arrays that will hold yA, yB and yC_n
-    yA = numpy.zeros([sobmtxA.shape[0]] + [len(model.observable_patterns)])
-    yB = numpy.zeros([sobmtxB.shape[0]] + [len(model.observable_patterns)])
-    yC = numpy.zeros(list(sobmtxC.shape[:2]) + [len(model.observable_patterns)]) # matrix is of shape (nparam, nsamples)
+    yA = numpy.zeros([ldmtxA.shape[0]] + [len(model.observable_patterns)])
+    yB = numpy.zeros([ldmtxB.shape[0]] + [len(model.observable_patterns)])
+    yC = numpy.zeros(list(ldmtxC.shape[:2]) + [len(model.observable_patterns)]) # matrix is of shape (nparam, nsamples)
 
     # specify that this is normalized data
     if norm is True:
         # First process the A and B matrices
-        print "processing matrix A, %d iterations:", sobmtxA.shape[0]
-        for i in range(sobmtxA.shape[0]):
-            outlist = odesolve(model, time, envlist, sobmtxA[i], useparams, ic)
+        print "processing matrix A, %d iterations:", ldmtxA.shape[0]
+        for i in range(ldmtxA.shape[0]):
+            outlist = odesolve(model, time, envlist, ldmtxA[i], useparams, ic)
             datamax = numpy.max(outlist[0], axis = 1)
             datamin = numpy.min(outlist[0], axis = 1)
             outlistnorm = ((outlist[0].T - datamin)/(datamax-datamin)).T
@@ -371,9 +368,9 @@ def parmeval(model, sobmtxA, sobmtxB, sobmtxC, time, envlist, xpdata, xspairlist
             yA[i] = compare_data(xpdata, outlistnorm, xspairlist, vardata)
             spinner(i)
 
-        print "\nprocessing matrix B, %d iterations:", sobmtxB.shape[0]
-        for i in range(sobmtxB.shape[0]):
-            outlist = odesolve(model, time, envlist, sobmtxB[i], useparams, ic)
+        print "\nprocessing matrix B, %d iterations:", ldmtxB.shape[0]
+        for i in range(ldmtxB.shape[0]):
+            outlist = odesolve(model, time, envlist, ldmtxB[i], useparams, ic)
             datamax = numpy.max(outlist[0], axis = 1)
             datamin = numpy.min(outlist[0], axis = 1)
             outlistnorm = ((outlist[0].T - datamin)/(datamax-datamin)).T
@@ -383,11 +380,11 @@ def parmeval(model, sobmtxA, sobmtxB, sobmtxC, time, envlist, xpdata, xspairlist
             spinner(i)
 
         # now the C matrix, a bit more complicated b/c it is of size params x samples
-        print "\nprocessing matrix C_n, %d parameters:"%(sobmtxC.shape[0])
-        for i in range(sobmtxC.shape[0]):
-            print "\nprocessing processing parameter %d, %d iterations"%(i,sobmtxC.shape[1])
-            for j in range(sobmtxC.shape[1]):
-                outlist = odesolve(model, time, envlist, sobmtxC[i][j], useparams, ic)
+        print "\nprocessing matrix C_n, %d parameters:"%(ldmtxC.shape[0])
+        for i in range(ldmtxC.shape[0]):
+            print "\nprocessing processing parameter %d, %d iterations"%(i,ldmtxC.shape[1])
+            for j in range(ldmtxC.shape[1]):
+                outlist = odesolve(model, time, envlist, ldmtxC[i][j], useparams, ic)
                 datamax = numpy.max(outlist[0], axis = 1)
                 datamin = numpy.min(outlist[0], axis = 1)
                 outlistnorm = ((outlist[0].T - datamin)/(datamax-datamin)).T
@@ -398,22 +395,22 @@ def parmeval(model, sobmtxA, sobmtxB, sobmtxC, time, envlist, xpdata, xspairlist
     else:
         # First process the A and B matrices
         print "processing matrix A:"
-        for i in range(sobmtxA.shape[0]):
-            outlist = odesolve(model, time, envlist, sobmtxA[i], useparams, ic)
+        for i in range(ldmtxA.shape[0]):
+            outlist = odesolve(model, time, envlist, ldmtxA[i], useparams, ic)
             yA[i] = compare_data(xpdata, outlist[0], xspairlist, vardata)
             spinner(i)
 
         print "processing matrix B:"
-        for i in range(sobmtxB.shape[0]):
-            outlist = odesolve(model, time, envlist, sobmtxB[i], useparams, ic)
+        for i in range(ldmtxB.shape[0]):
+            outlist = odesolve(model, time, envlist, ldmtxB[i], useparams, ic)
             yB[i] = compare_data(xpdata, outlistnorm, xspairlist, vardata)
             spinner(i)
 
         print "processing matrix C_n"
-        for i in range(sobmtxC.shape[0]):
+        for i in range(ldmtxC.shape[0]):
             print "processing processing parameter %d"%i
-            for j in range(sobmtxC.shape[1]):
-                outlist = odesolve(model, time, envlist, sobmtxC[i][j], useparams, ic)
+            for j in range(ldmtxC.shape[1]):
+                outlist = odesolve(model, time, envlist, ldmtxC[i][j], useparams, ic)
                 yC[i][j] = compare_data(xpdata, outlistnorm, xspairlist, vardata)
                 spinner(j)
 
